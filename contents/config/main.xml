@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+      http://www.kde.org/standards/kcfg/1.0/kcfg.xsd" >
+    <kcfgfile name="org.kde.hydrus.slideshow"/>
+  <group name="General">
+    <entry name="interval" type="Int">
+        <label>Slideshow interval (seconds)</label>
+        <default>10</default>
+        <min>1</min>
+        <max>3600</max>
+    </entry>
+    <entry name="randomize" type="Bool">
+        <label>Randomize order</label>
+        <default>true</default>
+    </entry>
+    <entry name="pauseOnMouseOver" type="Bool">
+        <label>Pause slideshow when mouse is over</label>
+        <default>true</default>
+    </entry>
+    <entry name="leftClickOpenImage" type="Bool">
+        <label>Open image in external app on click</label>
+        <default>true</default>
+    </entry>
+    <entry name="fillMode" type="int">
+        <label>Image fill mode (0=Stretch,1=AspectFit,2=AspectCrop,3=Tile,4=TileVert,5=TileHoriz,6=Pad)</label>
+        <default>1</default>
+    </entry>
+  </group>
+  <group name="Hydrus">
+    <entry name="apiUrl" type="String">
+      <label>Hydrus API URL</label>
+      <default>http://127.0.0.1:45869</default>
+    </entry>
+    <entry name="accessKey" type="String">
+      <label>Hydrus API Access Key</label>
+      <default></default>
+    </entry>
+    <entry name="searchTags" type="String">
+      <label>Tags to search (comma-separated)</label>
+      <default></default>
+    </entry>
+    <entry name="displayTags" type="String">
+      <label>Tags to display on image (comma-separated, leave empty for all)</label>
+      <default></default>
+    </entry>
+    <entry name="fileDomain" type="String">
+      <label>File domain to search in</label>
+      <default>all local files</default>
+    </entry>
+    <entry name="showThumbnails" type="Bool">
+        <label>Use thumbnails instead of full images (faster)</label>
+        <default>false</default>
+    </entry>
+  </group>
+</kcfg>

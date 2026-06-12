@@ -1,0 +1,36 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Email": "minimon4@gmail.com",
+                "Name": "Aleksandr Pampurin"
+            }
+        ],
+        "Category": "Utilities",
+        "Description": "A slideshow widget that displays images from Hydrus Network albums.",
+        "Description[ru]": "Виджет для показа слайд-шоу из альбомов сети Hydrus.",
+        "EnabledByDefault": true,
+        "Icon": "image-x-generic",
+        "Id": "org.kde.hydrus.slideshow",
+        "License": "GPLv3",
+        "Name": "Hydrus Network Slideshow",
+        "Name[ru]": "Hydrus Network Slideshow",
+        "ServiceTypes": [
+            "Plasma/Applet"
+        ],
+        "Version": "0.1",
+        "Website": "https://github.com/apampurin/hydrus-slideshow"
+    },
+    "X-Plasma-API": "declarativeappletscript",
+    "X-Plasma-DropMimeTypes": [
+        "inode/directory",
+        "image/jpeg",
+        "image/png",
+        "image/svg+xml",
+        "image/svg+xml-compressed",
+        "image/bmp"
+    ],
+    "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-Configuration": "config/config.qml",
+    "X-Plasma-StandAloneApp": true
+}
