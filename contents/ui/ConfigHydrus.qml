@@ -19,6 +19,8 @@ Kirigami.FormLayout {
     property string cfg_searchTags: ""
     property string cfg_fileDomain: "all local files"
     property bool cfg_showThumbnails: true
+    property string cfg_ratingServiceName: "" // Added for rating service name
+    property string cfg_displayTags: "" // Added for display tags
 
     // Hydrus API URL
     TextField {
@@ -56,6 +58,24 @@ Kirigami.FormLayout {
         font.pointSize: 8
     }
 
+    // Rating service name
+    TextField {
+        id: ratingServiceNameField
+        Kirigami.FormData.label: i18nc("@label:textbox", "Rating service name:")
+        placeholderText: i18n("e.g. favourites")
+        text: cfg_ratingServiceName
+        onTextChanged: cfg_ratingServiceName = text
+    }
+
+    // Display tags
+    TextField {
+        id: displayTagsField
+        Kirigami.FormData.label: i18nc("@label:textbox", "Display tags:")
+        placeholderText: i18n("e.g. anime, cute")
+        text: cfg_displayTags
+        onTextChanged: cfg_displayTags = text
+    }
+
     // Search tags
     TextField {
         id: searchTagsField
@@ -68,7 +88,7 @@ Kirigami.FormLayout {
     Label {
         Layout.fillWidth: true
         wrapMode: Text.WordWrap
-        text: i18n("Comma-separated tags to search for.")
+        text: i18n("Comma-separated tags (AND). Use | for OR, e.g.: cat|dog, blue")
         opacity: 0.6
         font.pointSize: 8
     }

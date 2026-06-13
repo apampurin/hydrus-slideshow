@@ -48,6 +48,12 @@
     <entry name="fileDomain" type="String">
       <label>File domain to search in</label>
       <default>all local files</default>
+      <hint>Use '|' for OR, e.g.: cat|dog, blue</hint>
+    </entry>
+    <entry name="ratingServiceName" type="String">
+      <label>Rating service name</label>
+      <default></default>
+      <hint>e.g. "favourites"</hint>
     </entry>
     <entry name="showThumbnails" type="Bool">
         <label>Use thumbnails instead of full images (faster)</label>

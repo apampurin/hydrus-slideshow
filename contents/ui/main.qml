@@ -54,6 +54,10 @@ Item {
     // For the UI
     property string activeSource: ""
     property string transitionSource: ""
+    
+    // Cached service key
+    property string resolvedServiceKey: ""
+    property int currentRating: 0 // 0: unset, 1: like, -1: dislike
 
     readonly property bool pause: overlayMouseArea.containsMouse && plasmoid.configuration.pauseOnMouseOver
     readonly property int itemCount: fileHashes.length
@@ -71,12 +75,358 @@ Item {
     }
 
     // -----------------------------------------------------------------------
-    // Hydrus API interaction
+    // Reconnection timer - retries connection every 10 seconds when no items
     // -----------------------------------------------------------------------
-    function fetchImages() {
-        console.log("Hydrus: fetchImages")
+    Timer {
+        id: reconnectTimer
+        interval: 10000
+        repeat: true
+        running: !hasItems && hasFetched && !loading
+        onTriggered: {
+            console.log("Hydrus: attempting reconnection...")
+            fetchImages()
+        }
+    }
 
-        var tags = hydrusSearchTags.split(',').map(function(t) { return t.trim() }).filter(function(t) { return t !== "" })
+    // -----------------------------------------------------------------------
+    // Image URL helpers
+    // -----------------------------------------------------------------------
+    function getImageUrl(hash) {
+        if (hydrusShowThumbnails) {
+            return hydrusApiUrl + "/get_files/thumbnail?hash=" + hash +
+                   "&Hydrus-Client-API-Access-Key=" + hydrusAccessKey
+        } else {
+            return hydrusApiUrl + "/get_files/file?hash=" + hash +
+                   "&Hydrus-Client-API-Access-Key=" + hydrusAccessKey
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Resolve file domain name -> service key (async, caches result)
+    // -----------------------------------------------------------------------
+    function resolveServiceKey() {
+        if (!hydrusFileDomain || hydrusFileDomain === "" || hydrusFileDomain === "all local files") {
+            resolvedServiceKey = ""
+            console.log("Hydrus: using default file domain, no service key needed")
+            return
+        }
+
+        console.log("Hydrus: resolving service key for domain:", hydrusFileDomain)
+
+        var svcXhr = new XMLHttpRequest()
+        var svcUrl = hydrusApiUrl + "/get_services"
+        svcXhr.open("GET", svcUrl)
+        svcXhr.setRequestHeader("Hydrus-Client-API-Access-Key", hydrusAccessKey)
+
+        svcXhr.onload = function() {
+            if (svcXhr.status === 200) {
+                try {
+                    var svcResp = JSON.parse(svcXhr.responseText)
+                    var servicesObj = svcResp.services
+                    if (!servicesObj) {
+                        console.error("Hydrus: unexpected services response, no 'services' key")
+                        resolvedServiceKey = ""
+                        return
+                    }
+
+                    function hexDecode(str) {
+                        var result = ""
+                        for (var i = 0; i < str.length; i += 2) {
+                            result += String.fromCharCode(parseInt(str.substring(i, i+2), 16))
+                        }
+                        return result
+                    }
+
+                    var found = false
+
+                    // Handle object with hex-encoded category keys
+                    if (typeof servicesObj === "object" && !Array.isArray(servicesObj)) {
+                        var keys = Object.keys(servicesObj)
+                        for (var ki = 0; ki < keys.length; ki++) {
+                            var catKey = keys[ki]
+                            var catVal = servicesObj[catKey]
+
+                            // Single service object
+                            if (catVal && typeof catVal === "object" && !Array.isArray(catVal)) {
+                                var svcName = catVal.name || hexDecode(catKey)
+                                if (svcName === hydrusFileDomain) {
+                                    resolvedServiceKey = catVal.service_key || catVal.key || catKey
+                                    found = true
+                                    break
+                                }
+                            }
+                            // Array of service objects
+                            else if (Array.isArray(catVal)) {
+                                for (var idx = 0; idx < catVal.length; idx++) {
+                                    var svc = catVal[idx]
+                                    var svcName2 = svc.name || hexDecode(catKey)
+                                    if (svcName2 === hydrusFileDomain) {
+                                        resolvedServiceKey = svc.service_key || svc.key || catKey
+                                        found = true
+                                        break
+                                    }
+                                }
+                                if (found) break
+                            }
+                        }
+                    }
+                    // Handle flat array
+                    else if (Array.isArray(servicesObj)) {
+                        for (var si = 0; si < servicesObj.length; si++) {
+                            var s = servicesObj[si]
+                            if (s.name === hydrusFileDomain) {
+                                resolvedServiceKey = s.service_key || s.key
+                                found = true
+                                break
+                            }
+                        }
+                    }
+
+                    if (found) {
+                        console.log("Hydrus: resolved service key for", hydrusFileDomain)
+                    } else {
+                        console.warn("Hydrus: service not found:", hydrusFileDomain + ".")
+                        console.log("Hydrus: You can also use hex service key directly.")
+                        resolvedServiceKey = ""
+                    }
+                } catch(e) {
+                    console.error("Hydrus: error parsing services response:", e)
+                    resolvedServiceKey = ""
+                }
+            } else {
+                console.error("Hydrus: error fetching services:", svcXhr.status, svcXhr.responseText)
+                resolvedServiceKey = ""
+            }
+        }
+
+        svcXhr.onerror = function() {
+            console.error("Hydrus: network error fetching services")
+            resolvedServiceKey = ""
+        }
+
+        svcXhr.send()
+    }
+
+    // -----------------------------------------------------------------------
+    // Resolve rating service key by name (async, calls callback with result)
+    // -----------------------------------------------------------------------
+    function getRatingServiceKeyAsync(callback) {
+        var ratingServiceName = plasmoid.configuration.ratingServiceName;
+        if (!ratingServiceName) {
+            console.warn("Hydrus: Rating service name not configured.");
+            callback("");
+            return;
+        }
+
+        console.log("Hydrus: resolving rating service key for:", ratingServiceName);
+
+        var svcXhr = new XMLHttpRequest();
+        var svcUrl = hydrusApiUrl + "/get_services";
+        svcXhr.open("GET", svcUrl);
+        svcXhr.setRequestHeader("Hydrus-Client-API-Access-Key", hydrusAccessKey);
+
+        svcXhr.onload = function() {
+            if (svcXhr.status === 200) {
+                try {
+                    var svcResp = JSON.parse(svcXhr.responseText);
+                    var servicesObj = svcResp.services;
+                    if (!servicesObj) {
+                        console.error("Hydrus: unexpected services response, no 'services' key");
+                        callback("");
+                        return;
+                    }
+
+                    function hexDecode(str) {
+                        var result = "";
+                        for (var i = 0; i < str.length; i += 2) {
+                            result += String.fromCharCode(parseInt(str.substring(i, i+2), 16));
+                        }
+                        return result;
+                    }
+
+                    var found = false;
+                    var foundServiceKey = "";
+
+                    // Handle object with hex-encoded category keys
+                    if (typeof servicesObj === "object" && !Array.isArray(servicesObj)) {
+                        var keys = Object.keys(servicesObj);
+                        for (var ki = 0; ki < keys.length; ki++) {
+                            var catKey = keys[ki];
+                            var catVal = servicesObj[catKey];
+
+                            // Single service object
+                            if (catVal && typeof catVal === "object" && !Array.isArray(catVal)) {
+                                var svcName = catVal.name || hexDecode(catKey);
+                                if (svcName === ratingServiceName) {
+                                    foundServiceKey = catVal.service_key || catVal.key || catKey;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            // Array of service objects
+                            else if (Array.isArray(catVal)) {
+                                for (var idx = 0; idx < catVal.length; idx++) {
+                                    var svc = catVal[idx];
+                                    var svcName2 = svc.name || hexDecode(catKey);
+                                    if (svcName2 === ratingServiceName) {
+                                        foundServiceKey = svc.service_key || svc.key || catKey;
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (found) break;
+                            }
+                        }
+                    }
+                    // Handle flat array
+                    else if (Array.isArray(servicesObj)) {
+                        for (var si = 0; si < servicesObj.length; si++) {
+                            var s = servicesObj[si];
+                            if (s.name === ratingServiceName) {
+                                foundServiceKey = s.service_key || s.key;
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (found) {
+                        console.log("Hydrus: resolved rating service key for", ratingServiceName);
+                        callback(foundServiceKey);
+                    } else {
+                        console.warn("Hydrus: rating service not found:", ratingServiceName + ".");
+                        console.log("Hydrus: You can also use hex service key directly.");
+                        callback("");
+                    }
+                } catch(e) {
+                    console.error("Hydrus: error parsing services response for rating service:", e);
+                    callback("");
+                }
+            } else {
+                console.error("Hydrus: error fetching services for rating:", svcXhr.status, svcXhr.responseText);
+                callback("");
+            }
+        }
+
+        svcXhr.onerror = function() {
+            console.error("Hydrus: network error fetching services for rating");
+            callback("");
+        }
+
+        svcXhr.send();
+    }
+
+    // -----------------------------------------------------------------------
+    // Set rating for the current image
+    // -----------------------------------------------------------------------
+    // For Like/Dislike services, convert 1 -> true (like), -1 -> false (dislike), 0 -> null (unset)
+    function setRating(rating) {
+        if (!hasItems || currentImageIndex < 0) {
+            console.warn("Hydrus: No item to rate.");
+            return;
+        }
+
+        var hash = fileHashes[currentImageIndex];
+        var ratingServiceName = plasmoid.configuration.ratingServiceName;
+
+        if (!ratingServiceName) {
+            console.warn("Hydrus: Rating service name not configured. Cannot set rating.");
+            return;
+        }
+
+        // Get the rating service key asynchronously
+        getRatingServiceKeyAsync(function(serviceKey) {
+            if (!serviceKey) {
+                console.warn("Hydrus: Could not resolve service key for rating service '" + ratingServiceName + "'. Ensure the service name is correct in configuration.");
+                return;
+            }
+
+            // Convert numeric rating to boolean for Like/Dislike services
+            var apiRating;
+            if (rating === 1) {
+                apiRating = true;  // like
+            } else if (rating === -1) {
+                apiRating = false; // dislike
+            } else {
+                apiRating = null;  // unset
+            }
+
+            // Construct the URL according to the documentation: POST /edit_ratings/set_rating
+            var url = hydrusApiUrl + "/edit_ratings/set_rating";
+
+            console.log("Hydrus: Setting rating for hash", hash, "to", apiRating, "using service key", serviceKey);
+
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", url);
+            xhr.setRequestHeader("Content-Type", "application/json");
+            xhr.setRequestHeader("Hydrus-Client-API-Access-Key", hydrusAccessKey);
+
+            // Send parameters as JSON body, using 'rating_service_key' as per documentation
+            xhr.send(JSON.stringify({
+                "hash": hash,
+                "rating": apiRating,
+                "rating_service_key": serviceKey
+            }));
+
+            xhr.onload = function() {
+                if (xhr.status === 200) {
+                    console.log("Hydrus: Rating set successfully.");
+                } else {
+                    console.error("Hydrus: Error setting rating:", xhr.status, xhr.responseText);
+                }
+            }
+
+            xhr.onerror = function() {
+                console.error("Hydrus: Network error setting rating.");
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag parsing with OR support (| within comma-separated groups)
+    //   e.g. "cat|dog, blue" -> [["cat","dog"], "blue"]
+    //   each top-level element is AND-ed, arrays are OR-ed
+    // -----------------------------------------------------------------------
+    // Tag parsing with OR support (| within comma-separated groups)
+    //   e.g. "cat|dog, blue" -> [["cat","dog"], "blue"]
+    //   each top-level element is AND-ed, arrays are OR-ed
+    // -----------------------------------------------------------------------
+    function parseTags(tagsString) {
+        var tags = []
+        var groups = tagsString.split(',')
+        for (var i = 0; i < groups.length; i++) {
+            var group = groups[i].trim()
+            if (group === "") continue
+
+            var orTags = group.split('|')
+            if (orTags.length > 1) {
+                var orGroup = []
+                for (var j = 0; j < orTags.length; j++) {
+                    var tag = orTags[j].trim()
+                    if (tag !== "") {
+                        orGroup.push(tag)
+                    }
+                }
+                if (orGroup.length > 0) {
+                    tags.push(orGroup)
+                }
+            } else {
+                var tag = group.trim()
+                if (tag !== "") {
+                    tags.push([tag])
+                }
+            }
+        }
+        return tags
+    }
+
+    // -----------------------------------------------------------------------
+    // Fetch images from Hydrus API
+    // -----------------------------------------------------------------------
+    function doSearch() {
+        console.log("Hydrus: doSearch")
+
+        var tags = parseTags(hydrusSearchTags)
 
         if (!hydrusApiUrl || !hydrusAccessKey || tags.length === 0) {
             loading = false
@@ -88,11 +438,33 @@ Item {
         loading = true
         activeSource = ""
 
-        // Build URL for search
-        // file_service_key is not passed: Hydrus uses "all my files" by default.
-        // Passing a service name like "all local files" fails because Hydrus expects a hex service key.
-        var url = hydrusApiUrl + "/get_files/search_files?tags=" + encodeURIComponent(JSON.stringify(tags)) +
-                  "&return_hashes=true&return_file_ids=false"
+        // Build proper JSON array for Hydrus API
+        // The API expects a JSON array where OR groups are nested arrays:
+        // e.g. ["skirt", ["space bounty hunter", "jane raider"], "system:height > 1000"]
+        var tagsArray = [];
+        for (var i = 0; i < tags.length; i++) {
+            var group = tags[i];
+            if (group.length === 1) {
+                // Single tag (AND condition)
+                tagsArray.push(group[0]);
+            } else {
+                // OR condition within the group — keep as nested array
+                tagsArray.push(group);
+            }
+        }
+        var tagsParam = JSON.stringify(tagsArray);
+
+        var url = hydrusApiUrl + "/get_files/search_files?tags=" +
+                  encodeURIComponent(tagsParam) +
+                  "&return_hashes=true&return_file_ids=false";
+
+        // If a specific domain is configured (not "all local files"), use the resolved key
+        if (hydrusFileDomain && hydrusFileDomain !== "all local files" && resolvedServiceKey) {
+            console.log("Hydrus: using service key:", resolvedServiceKey)
+            url += "&file_service_key=" + encodeURIComponent(resolvedServiceKey)
+        } else {
+            console.log("Hydrus: using default file domain")
+        }
 
         console.log("Hydrus: fetch URL:", url)
         console.log("Hydrus: access key length:", hydrusAccessKey ? hydrusAccessKey.length : 0)
@@ -100,19 +472,16 @@ Item {
         var xhr = new XMLHttpRequest()
         xhr.open("GET", url)
         xhr.setRequestHeader("Hydrus-Client-API-Access-Key", hydrusAccessKey)
-        console.log("Hydrus: request header set: Hydrus-Client-API-Access-Key")
 
         xhr.onload = function() {
             console.log("Hydrus: response status:", xhr.status)
-            console.log("Hydrus: response text:", xhr.responseText)
             if (xhr.status === 200) {
                 try {
                     var resp = JSON.parse(xhr.responseText)
-                    console.log("Hydrus: parsed response:", JSON.stringify(resp))
                     fileHashes = resp.hashes || []
+                    console.log("Hydrus: received", fileHashes.length, "image hashes")
 
                     if (fileHashes.length > 0) {
-                        // If randomize, shuffle the array
                         if (plasmoid.configuration.randomize) {
                             shuffleArray(fileHashes)
                         }
@@ -143,14 +512,26 @@ Item {
         xhr.send()
     }
 
-    function getImageUrl(hash) {
-        if (hydrusShowThumbnails) {
-            return hydrusApiUrl + "/get_files/thumbnail?hash=" + hash +
-                   "&Hydrus-Client-API-Access-Key=" + hydrusAccessKey
-        } else {
-            return hydrusApiUrl + "/get_files/file?hash=" + hash +
-                   "&Hydrus-Client-API-Access-Key=" + hydrusAccessKey
-        }
+    // -----------------------------------------------------------------------
+    // fetchImages: resolve service key (if needed), then search
+    // -----------------------------------------------------------------------
+    function fetchImages() {
+        console.log("Hydrus: fetchImages")
+
+        // Pre-resolve service key asynchronously, then do search
+        // We delay search slightly to give the service key resolution time to complete
+        resolveServiceKey()
+
+        // Do the search after a short delay to let the async service lookup complete
+        deferredSearch.restart()
+    }
+
+    // Timer to allow async service key resolution to complete before searching
+    Timer {
+        id: deferredSearch
+        interval: 500
+        repeat: false
+        onTriggered: doSearch()
     }
 
     function shuffleArray(arr) {
@@ -232,17 +613,17 @@ Item {
     Connections {
         target: plasmoid.configuration
 
-        function onApiUrlChanged() { 
+        function onApiUrlChanged() {
             console.log("API URL changed")
-            fetchImages() 
+            fetchImages()
         }
-        function onAccessKeyChanged() { 
+        function onAccessKeyChanged() {
             console.log("Access key changed")
-            fetchImages() 
+            fetchImages()
         }
-        function onSearchTagsChanged() { 
+        function onSearchTagsChanged() {
             console.log("Search tags changed")
-            fetchImages() 
+            fetchImages()
         }
         function onDisplayTagsChanged() { /* handled by display */ }
         function onShowThumbnailsChanged() {
@@ -257,8 +638,15 @@ Item {
         function onRandomizeChanged() { /* takes effect on next fetch */ }
         function onFillModeChanged() { /* handled by fillMode binding */ }
         function onFileDomainChanged() {
-            console.log("File domain changed")
-            fetchImages()
+            console.log("File domain changed. Current domain:", plasmoid.configuration.fileDomain)
+            // This is for image sources, not ratings. We don't reset resolvedServiceKey here.
+            // fetchImages() // No need to re-fetch images just because file domain changed if it's not related to ratings
+        }
+
+        function onRatingServiceNameChanged() {
+            console.log("Rating service name changed. Current rating service:", plasmoid.configuration.ratingServiceName)
+            // Rating service key is now resolved on-demand by getRatingServiceKeyAsync,
+            // so we don't need to resolve anything here.
         }
     }
 
@@ -431,20 +819,6 @@ Item {
             NumberAnimation { duration: PlasmaCore.Units.longDuration }
         }
 
-        // Previous button
-        PlasmaComponents3.Button {
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.leftMargin: PlasmaCore.Units.smallSpacing
-            enabled: history.length > 0
-            visible: main.itemCount > 1
-            icon.name: "arrow-left"
-            onClicked: {
-                nextTimer.stop()
-                previousItem()
-            }
-        }
-
         // Next button
         PlasmaComponents3.Button {
             anchors.right: parent.right
@@ -465,6 +839,22 @@ Item {
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.bottomMargin: PlasmaCore.Units.smallSpacing
             spacing: PlasmaCore.Units.smallSpacing
+
+            // Like button
+            PlasmaComponents3.Button {
+                icon.name: "emblem-favorite" // Or a custom like icon if available
+                onClicked: {
+                    main.setRating(1); // 1 for like
+                }
+            }
+
+            // Dislike button
+            PlasmaComponents3.Button {
+                icon.name: "dialog-cancel" // Иконка для dislike (отрицательное действие)
+                onClicked: {
+                    main.setRating(-1); // -1 for dislike
+                }
+            }
 
             // Open in Hydrus client
             PlasmaComponents3.Button {
