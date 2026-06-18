@@ -383,9 +383,71 @@ Item {
     }
 
     // -----------------------------------------------------------------------
-    // Tag parsing with OR support (| within comma-separated groups)
-    //   e.g. "cat|dog, blue" -> [["cat","dog"], "blue"]
-    //   each top-level element is AND-ed, arrays are OR-ed
+    // Delete current file (move to trash)
+    // -----------------------------------------------------------------------
+    function deleteCurrentFile() {
+        if (!hasItems || currentImageIndex < 0) {
+            console.warn("Hydrus: No item to delete.");
+            return;
+        }
+
+        var hash = fileHashes[currentImageIndex];
+        console.log("Hydrus: Deleting file", hash);
+
+        // Show confirmation dialog
+        confirmDeleteDialog.pendingHash = hash
+        confirmDeleteDialog.visible = true
+    }
+
+    // -----------------------------------------------------------------------
+    // Actually perform the delete after confirmation
+    // -----------------------------------------------------------------------
+    function doDeleteFile(hash) {
+        console.log("Hydrus: Performing delete for hash", hash);
+
+        // POST /add_files/delete_files
+        var url = hydrusApiUrl + "/add_files/delete_files";
+
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.setRequestHeader("Hydrus-Client-API-Access-Key", hydrusAccessKey);
+
+        xhr.send(JSON.stringify({
+            "hash": hash
+        }));
+
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                console.log("Hydrus: File deleted successfully.");
+
+                // Remove from list and advance to next
+                var idx = fileHashes.indexOf(hash)
+                if (idx >= 0) {
+                    fileHashes.splice(idx, 1)
+                    // If we deleted the current item, adjust
+                    if (currentImageIndex >= fileHashes.length) {
+                        currentImageIndex = fileHashes.length - 1
+                    }
+                    if (fileHashes.length > 0) {
+                        // Refresh display
+                        setActiveSource(getImageUrl(fileHashes[currentImageIndex]))
+                    } else {
+                        // No more items
+                        activeSource = ""
+                        transitionSource = ""
+                    }
+                }
+            } else {
+                console.error("Hydrus: Error deleting file:", xhr.status, xhr.responseText);
+            }
+        }
+
+        xhr.onerror = function() {
+            console.error("Hydrus: Network error deleting file.");
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Tag parsing with OR support (| within comma-separated groups)
     //   e.g. "cat|dog, blue" -> [["cat","dog"], "blue"]
@@ -842,7 +904,7 @@ Item {
 
             // Like button
             PlasmaComponents3.Button {
-                icon.name: "emblem-favorite" // Or a custom like icon if available
+                icon.name: "emblem-favorite"
                 onClicked: {
                     main.setRating(1); // 1 for like
                 }
@@ -850,7 +912,7 @@ Item {
 
             // Dislike button
             PlasmaComponents3.Button {
-                icon.name: "dialog-cancel" // Иконка для dislike (отрицательное действие)
+                icon.name: "dialog-cancel"
                 onClicked: {
                     main.setRating(-1); // -1 for dislike
                 }
@@ -869,16 +931,91 @@ Item {
                     }
                 }
             }
+
+            // Separator
+            PlasmaComponents3.ToolButton {
+                icon.name: "view-more-symbolic"
+                enabled: false
+                opacity: 0.3
+            }
+
+            // Delete to trash button
+            PlasmaComponents3.Button {
+                icon.name: "user-trash-symbolic"
+                onClicked: {
+                    main.deleteCurrentFile()
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Confirm delete dialog (simple overlay)
+    // -----------------------------------------------------------------------
+    Item {
+        id: confirmDeleteDialog
+        property string pendingHash: ""
+        property bool deleteConfirmed: false
+
+        visible: false
+        anchors.fill: parent
+        z: 100
+
+        // Semi-transparent background
+        Rectangle {
+            anchors.fill: parent
+            color: "black"
+            opacity: 0.5
         }
 
-        // Mouse area for hover detection
-        MouseArea {
-            id: overlayMouseArea
-            anchors.fill: parent
-            hoverEnabled: true
-            propagateComposedEvents: true
-            onPressed: mouse.accepted = false
-            onDoubleClicked: mouse.accepted = false
+        // Dialog box
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width * 0.8, 300)
+            height: dialogContent.height + PlasmaCore.Units.gridUnit * 2
+            color: PlasmaCore.Theme.backgroundColor
+            radius: PlasmaCore.Units.smallRadius
+            opacity: 1.0
+
+            Column {
+                id: dialogContent
+                x: PlasmaCore.Units.gridUnit
+                y: PlasmaCore.Units.gridUnit
+                width: parent.width - PlasmaCore.Units.gridUnit * 2
+                spacing: PlasmaCore.Units.smallSpacing
+
+                PlasmaComponents3.Label {
+                    text: i18n("Are you sure you want to move this file to the trash?")
+                    wrapMode: Text.WordWrap
+                    width: parent.width
+                }
+
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    spacing: PlasmaCore.Units.smallSpacing
+
+                    PlasmaComponents3.Button {
+                        text: i18n("Cancel")
+                        icon.name: "dialog-cancel"
+                        onClicked: {
+                            confirmDeleteDialog.visible = false
+                            confirmDeleteDialog.deleteConfirmed = false
+                        }
+                    }
+
+                    PlasmaComponents3.Button {
+                        text: i18n("Delete")
+                        icon.name: "user-trash-symbolic"
+                        onClicked: {
+                            confirmDeleteDialog.visible = false
+                            confirmDeleteDialog.deleteConfirmed = true
+                            if (confirmDeleteDialog.pendingHash) {
+                                main.doDeleteFile(confirmDeleteDialog.pendingHash)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
